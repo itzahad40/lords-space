@@ -20,13 +20,21 @@ jobs:
             11
             17
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install SDK parts (API 33, build-tools, NDK, CMake)
+      # No third-party SDK action: install the Android command-line tools ourselves, then the packages we need.
+      - name: Install Android SDK (API 33, build-tools 31.0.0, NDK 21, CMake 3.10.2)
         run: |
+          set -e
+          export ANDROID_SDK_ROOT="$HOME/android-sdk"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          SDKM="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           java -version
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-33" "build-tools;31.0.0" "ndk;21.4.7075529" "cmake;3.10.2"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platform-tools" "platforms;android-33" "build-tools;31.0.0" "ndk;21.4.7075529" "cmake;3.10.2"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Build debug APK (JDK 11)
         env:
