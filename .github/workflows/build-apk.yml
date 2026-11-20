@@ -11,20 +11,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Two JDKs: 17 is needed by the Android sdkmanager, 11 is needed by this old project (Gradle 7.0.2 / AGP 7.0.2).
+      # The last one listed (17) becomes the default JAVA_HOME; the build step switches to 11 explicitly.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '11'
+          java-version: |
+            11
+            17
 
       - uses: android-actions/setup-android@v3
 
       - name: Install SDK parts (API 33, build-tools, NDK, CMake)
         run: |
+          java -version
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platforms;android-33" "build-tools;31.0.0" "ndk;21.4.7075529" "cmake;3.10.2"
 
-      - name: Build debug APK
+      - name: Build debug APK (JDK 11)
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_11_X64 }}
         run: |
+          java -version
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
