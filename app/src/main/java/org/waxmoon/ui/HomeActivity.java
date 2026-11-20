@@ -126,16 +126,8 @@ public class HomeActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // Google Play is only enabled when the user taps the Play Store row or the menu entry.
         refresh();
-        final int space = Spaces.get(this);
-        final android.content.SharedPreferences sp = getSharedPreferences("lords_space_ui", MODE_PRIVATE);
-        if (hostHasPlay() && !sp.getBoolean("gp_" + space, false)) {
-            sp.edit().putBoolean("gp_" + space, true).apply();
-            new Thread(() -> {
-                ensureGoogle(space);
-                runOnUiThread(this::refresh);
-            }).start();
-        }
     }
 
     private void switchSpace(int delta) {
@@ -169,15 +161,63 @@ public class HomeActivity extends Activity {
         }
     }
 
+    private int refreshGen;
+    private int renderedGen;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+
+    /**
+     * Never talks to the engine on the UI thread: the screen is drawn at once and the list of apps arrives
+     * from a background thread. If the engine does not answer, a note says so instead of a black screen.
+     */
     private void refresh() {
         final int space = Spaces.get(this);
         spaceText.setText("Space " + space);
-        apps.removeAllViews();
-        List<String> inst = installedHere(space);
+        final int gen = ++refreshGen;
+        if (apps.getChildCount() == 0) {
+            render(space, new ArrayList<String>(), null, true);
+        }
+        handler.postDelayed(() -> {
+            if (gen == refreshGen && renderedGen != gen && !isFinishing()) {
+                render(space, new ArrayList<String>(), "The engine is slow to respond (still waiting).", true);
+            }
+        }, 4000);
+        new Thread(() -> {
+            List<String> inst = new ArrayList<>();
+            String err = null;
+            try {
+                List<String> l = HackApi.getInstalledPackages(0, space);
+                if (l != null) {
+                    inst = l;
+                }
+            } catch (Throwable t) {
+                err = t.getClass().getSimpleName() + ": " + t.getMessage();
+            }
+            final List<String> fi = inst;
+            final String fe = err;
+            runOnUiThread(() -> {
+                if (gen == refreshGen && !isFinishing()) {
+                    renderedGen = gen;
+                    render(space, fi, fe, false);
+                }
+            });
+        }).start();
+    }
 
-        boolean playReady = inst.contains(VENDING);
-        addRow(null, "Play Store", playReady ? "PRE-INSTALLED" : (hostHasPlay() ? "TAP TO ENABLE" : "NOT ON THIS PHONE"),
-                true, v -> openPlay(), null);
+    private void render(final int space, List<String> inst, String error, boolean loading) {
+        apps.removeAllViews();
+        if (error != null) {
+            TextView note = Ui.text(this, "Engine problem: " + error, 12, Ui.RED_LIGHT);
+            note.setBackground(Ui.rect(this, 0xFF1A0C10, 14, 0xFF4A1118, 1));
+            note.setPadding(Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12), Ui.dp(this, 10));
+            LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-1, -2);
+            np.bottomMargin = Ui.dp(this, 10);
+            apps.addView(note, np);
+        }
+
+        String playSub = loading ? "CHECKING..."
+                : inst.contains(VENDING) ? "PRE-INSTALLED"
+                : (hostHasPlay() ? "TAP TO ENABLE" : "NOT ON THIS PHONE");
+        addRow(null, "Play Store", playSub, true, v -> openPlay(), null);
 
         for (final String pkg : inst) {
             if (pkg.equals(getPackageName()) || isGoogleCore(pkg)) {
@@ -202,6 +242,14 @@ public class HomeActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, Ui.dp(this, 52));
         lp.topMargin = Ui.dp(this, 6);
         apps.addView(add, lp);
+
+        if (error != null) {
+            Button retry = Ui.pill(this, "Retry", false);
+            retry.setOnClickListener(v -> refresh());
+            LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
+            rl.topMargin = Ui.dp(this, 10);
+            apps.addView(retry, rl);
+        }
     }
 
     private static boolean isGoogleCore(String pkg) {
@@ -279,8 +327,12 @@ public class HomeActivity extends Activity {
             return;
         }
         it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        if (HackApi.startActivity(it, space) != 0) {
-            toast("Could not start the app");
+        try {
+            if (HackApi.startActivity(it, space) != 0) {
+                toast("Could not start the app");
+            }
+        } catch (Throwable t) {
+            toast("Engine error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
         }
     }
 
@@ -296,8 +348,12 @@ public class HomeActivity extends Activity {
                 Intent it = getPackageManager().getLaunchIntentForPackage(VENDING);
                 if (it != null) {
                     it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-                    if (HackApi.startActivity(it, space) != 0) {
-                        toast("Could not open Google Play");
+                    try {
+                        if (HackApi.startActivity(it, space) != 0) {
+                            toast("Could not open Google Play");
+                        }
+                    } catch (Throwable t) {
+                        toast("Engine error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
                     }
                 }
                 refresh();
@@ -311,8 +367,13 @@ public class HomeActivity extends Activity {
                 .setTitle("Remove " + e.label + "?")
                 .setMessage("Removes it from Space " + space + ". Your phone's own copy is not touched.")
                 .setPositiveButton("Remove", (d, w) -> {
-                    HackApi.uninstallPackage(e.pkg, space);
-                    refresh();
+                    new Thread(() -> {
+                        try {
+                            HackApi.uninstallPackage(e.pkg, space);
+                        } catch (Throwable ignored) {
+                        }
+                        runOnUiThread(this::refresh);
+                    }).start();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
