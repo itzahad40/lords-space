@@ -16,6 +16,7 @@ public class MoonApplication extends HackApplication {
     protected void attachBaseContext(Context base) {
         super.attachBaseContext(base);
         sInstance = this;
+        CrashReporter.install(base);
     }
 
     @Override

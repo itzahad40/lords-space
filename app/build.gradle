@@ -9,11 +9,11 @@ android {
     defaultConfig {
         if (rootProject.ext.isMasterPkg) {
             applicationId rootProject.ext.masterPkg
-            manifestPlaceholders = [label: "Waxmoon"]
+            manifestPlaceholders = [label: "Lord's-Space"]
             ndk.abiFilters 'armeabi-v7a', 'arm64-v8a'
         } else {
             applicationId rootProject.ext.assistPkg
-            manifestPlaceholders = [label: "Waxmoon32"]
+            manifestPlaceholders = [label: "Lord's-Space helper"]
             ndk.abiFilters 'armeabi-v7a'
         }
         minSdk rootProject.ext.minSdkVersion

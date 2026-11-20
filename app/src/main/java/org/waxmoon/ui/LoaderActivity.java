@@ -65,6 +65,31 @@ public class LoaderActivity extends Activity {
         root.addView(bottom, bottomLp);
         setContentView(root);
 
+        final String crash = org.waxmoon.CrashReporter.take(this);
+        if (crash == null) {
+            startLoading(fill);
+        } else {
+            showCrash(crash, fill);
+        }
+    }
+
+    private void showCrash(final String report, final View fill) {
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("The app crashed last time")
+                .setMessage(report)
+                .setCancelable(false)
+                .setPositiveButton("Share", (d, w) -> {
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("text/plain");
+                    send.putExtra(Intent.EXTRA_TEXT, report);
+                    startActivity(Intent.createChooser(send, "Send crash report"));
+                    startLoading(fill);
+                })
+                .setNegativeButton("Continue", (d, w) -> startLoading(fill))
+                .show();
+    }
+
+    private void startLoading(final View fill) {
         final int full = Ui.dp(this, BAR_DP);
         ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
         anim.setDuration(1500);
