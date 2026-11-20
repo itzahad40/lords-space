@@ -34,6 +34,11 @@ public class FightModeActivity extends Activity {
     private final TextView[] chips = new TextView[FightModeConfig.VOICE_NAMES.length];
     private TextView presetText;
     private TextView hookStatus;
+    private TextView testText;
+    private android.widget.Button testBtn;
+    private volatile boolean testing;
+    private volatile float testIn;
+    private volatile float testOut;
     private int tickCount;
     private EqView eq;
     private boolean syncing;
@@ -41,7 +46,11 @@ public class FightModeActivity extends Activity {
     private final Runnable levelTick = new Runnable() {
         @Override
         public void run() {
-            float level = FightModeConfig.enabled ? FightModeConfig.readLevel() : 0f;
+            float level = testing ? Math.min(1f, testOut) : (FightModeConfig.enabled ? FightModeConfig.readLevel() : 0f);
+            if (testing) {
+                testText.setText("Mic test:  in " + Math.round(testIn * 100) + "%   out " + Math.round(testOut * 100)
+                        + "%   (Fight Mode " + (FightModeConfig.enabled ? "ON" : "OFF") + ")");
+            }
             for (int i = 0; i < segs.length; i++) {
                 segs[i].setBackgroundColor(level * segs.length > i ? Ui.RED : 0xFF2A2A30);
             }
@@ -89,6 +98,7 @@ public class FightModeActivity extends Activity {
     protected void onPause() {
         super.onPause();
         handler.removeCallbacks(levelTick);
+        stopTest();
     }
 
     private void build() {
@@ -153,6 +163,28 @@ public class FightModeActivity extends Activity {
         LinearLayout.LayoutParams prl = new LinearLayout.LayoutParams(-1, -2);
         prl.topMargin = Ui.dp(this, 16);
         col.addView(pr, prl);
+
+        // microphone test (works without any cloned app)
+        LinearLayout tr = new LinearLayout(this);
+        tr.setGravity(Gravity.CENTER_VERTICAL);
+        testBtn = Ui.pill(this, "Test microphone", false);
+        testBtn.setOnClickListener(v -> {
+            if (testing) {
+                stopTest();
+            } else {
+                startTest();
+            }
+        });
+        tr.addView(testBtn);
+        testText = Ui.text(this, FightModeNative.isAvailable()
+                ? "Speak and watch the level meter. Compare ON and OFF."
+                : "Native DSP not loaded (libfightmode)!", 12, FightModeNative.isAvailable() ? Ui.DIM : Ui.RED_LIGHT);
+        LinearLayout.LayoutParams ttl = new LinearLayout.LayoutParams(0, -2, 1f);
+        ttl.leftMargin = Ui.dp(this, 12);
+        tr.addView(testText, ttl);
+        LinearLayout.LayoutParams trl = new LinearLayout.LayoutParams(-1, -2);
+        trl.topMargin = Ui.dp(this, 12);
+        col.addView(tr, trl);
 
         // gain / volume
         LinearLayout c1 = card();
@@ -219,12 +251,87 @@ public class FightModeActivity extends Activity {
         col.addView(note, nl);
     }
 
+    private void startTest() {
+        if (!FightModeNative.isAvailable()) {
+            testText.setText("Native DSP not loaded (libfightmode)!");
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 7);
+            return;
+        }
+        testing = true;
+        testBtn.setText("Stop test");
+        new Thread(() -> {
+            final int rate = 44100;
+            android.media.AudioRecord rec = null;
+            try {
+                int min = android.media.AudioRecord.getMinBufferSize(rate,
+                        android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT);
+                rec = new android.media.AudioRecord(android.media.MediaRecorder.AudioSource.MIC, rate,
+                        android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT,
+                        Math.max(min, 8192));
+                if (rec.getState() != android.media.AudioRecord.STATE_INITIALIZED) {
+                    throw new IllegalStateException("microphone could not be opened");
+                }
+                rec.startRecording();
+                short[] buf = new short[2048];
+                while (testing) {
+                    int n = rec.read(buf, 0, buf.length);
+                    if (n <= 0) {
+                        continue;
+                    }
+                    testIn = peak(buf, n);
+                    FightModeConfig.pushToNative();
+                    FightModeNative.processShorts(buf, 0, n, 1, rate);
+                    testOut = peak(buf, n);
+                }
+            } catch (final Throwable t) {
+                runOnUiThread(() -> testText.setText("Mic test failed: " + t.getMessage()));
+            } finally {
+                testing = false;
+                if (rec != null) {
+                    try {
+                        rec.stop();
+                    } catch (Throwable ignored) {
+                    }
+                    rec.release();
+                }
+                runOnUiThread(() -> testBtn.setText("Test microphone"));
+            }
+        }).start();
+    }
+
+    private void stopTest() {
+        testing = false;
+    }
+
+    private static float peak(short[] b, int n) {
+        int p = 0;
+        for (int i = 0; i < n; i++) {
+            p = Math.max(p, Math.abs((int) b[i]));
+        }
+        return p / 32768f;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(code, perms, results);
+        if (code == 7 && results.length > 0 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            startTest();
+        } else if (code == 7) {
+            testText.setText("Microphone permission was not given.");
+        }
+    }
+
     /** Shows whether the mic hook is active inside a guest app on this Android version. */
     private void updateHookStatus() {
         String st = FightModeConfig.readHookStatus();
         String ver = "Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ")";
         if (st == null) {
-            hookStatus.setText("Mic hook: not seen yet. Open an app from Home first. " + ver);
+            hookStatus.setText("Mic hook in cloned apps: not seen yet. It only starts when you open a cloned app from Home. " + ver);
             hookStatus.setTextColor(Ui.DIM);
             return;
         }

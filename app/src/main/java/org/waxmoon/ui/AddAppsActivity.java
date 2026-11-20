@@ -134,21 +134,25 @@ public class AddAppsActivity extends Activity {
 
         new Thread(() -> {
             List<HostApps.Entry> apps = HostApps.load(this);
-            Set<String> here = new HashSet<>();
-            try {
-                List<String> l = HackApi.getInstalledPackages(0, space);
-                if (l != null) {
-                    here.addAll(l);
-                }
-            } catch (Throwable ignored) {
-            }
             runOnUiThread(() -> {
                 all.clear();
                 all.addAll(apps);
-                already.clear();
-                already.addAll(here);
+                sub.setText(apps.size() + " apps found, 0 selected");
                 filter("");
+                if (apps.isEmpty()) {
+                    Toast.makeText(this, "No apps found on this phone", Toast.LENGTH_LONG).show();
+                }
             });
+            // which of them are already in this space (may be slow, so it never blocks the list)
+            Engine.Result<List<String>> r = Engine.call(() -> HackApi.getInstalledPackages(0, space), 8000);
+            if (r.ok() && r.value != null) {
+                final Set<String> here = new HashSet<>(r.value);
+                runOnUiThread(() -> {
+                    already.clear();
+                    already.addAll(here);
+                    adapter.notifyDataSetChanged();
+                });
+            }
         }).start();
     }
 
@@ -177,7 +181,7 @@ public class AddAppsActivity extends Activity {
 
     private void updateButton() {
         int n = picked.size();
-        sub.setText(n + " selected");
+        sub.setText((all.isEmpty() ? "" : all.size() + " apps found, ") + n + " selected");
         clone.setText("CLONE (" + n + ")");
         clone.setEnabled(n > 0);
         clone.setTextColor(n > 0 ? Color.WHITE : Ui.DIM);
@@ -186,36 +190,47 @@ public class AddAppsActivity extends Activity {
 
     private void doClone() {
         final List<String> pkgs = new ArrayList<>(picked);
+        final java.util.Map<String, String> labels = new java.util.HashMap<>();
+        for (HostApps.Entry e : all) {
+            labels.put(e.pkg, e.label);
+        }
         clone.setEnabled(false);
-        clone.setText("CLONING...");
         new Thread(() -> {
-            int ok = 0, exists = 0, fail = 0;
-            for (String pkg : pkgs) {
-                int r;
-                try {
-                    r = HackApi.installPackageFromHost(pkg, space, false);
-                } catch (Throwable t) {
-                    r = -99;
-                }
-                if (r == INSTALL_SUCCEEDED) {
+            final StringBuilder report = new StringBuilder();
+            int ok = 0;
+            boolean stuck = false;
+            for (int i = 0; i < pkgs.size() && !stuck; i++) {
+                final String pkg = pkgs.get(i);
+                final int pos = i + 1;
+                runOnUiThread(() -> clone.setText("CLONING " + pos + "/" + pkgs.size() + "..."));
+                String name = labels.containsKey(pkg) ? labels.get(pkg) : pkg;
+                Engine.Result<Integer> r = Engine.call(() -> HackApi.installPackageFromHost(pkg, space, false), 90000);
+                if (r.timedOut) {
+                    report.append(name).append(": the engine did not answer after 90 s\n");
+                    stuck = true;
+                } else if (r.error != null) {
+                    report.append(name).append(": engine error, ").append(r.problem()).append('\n');
+                } else if (r.value != null && r.value == INSTALL_SUCCEEDED) {
                     ok++;
-                } else if (r == INSTALL_FAILED_ALREADY_EXISTS) {
-                    exists++;
+                    report.append(name).append(": added\n");
+                } else if (r.value != null && r.value == INSTALL_FAILED_ALREADY_EXISTS) {
+                    report.append(name).append(": already in this space\n");
                 } else {
-                    fail++;
+                    report.append(name).append(": failed (code ").append(r.value).append(")\n");
                 }
             }
-            final StringBuilder msg = new StringBuilder("Added " + ok + (ok == 1 ? " app" : " apps"));
-            if (exists > 0) {
-                msg.append(", ").append(exists).append(" already there");
+            if (stuck) {
+                report.append("\nThe engine looks stuck. Go back and use Menu > Engine check, then send me the result.");
             }
-            if (fail > 0) {
-                msg.append(", ").append(fail).append(" failed");
-            }
-            final boolean anyFail = fail > 0;
+            final int added = ok;
+            final String text = report.toString();
             runOnUiThread(() -> {
-                Toast.makeText(this, msg.toString(), anyFail ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
-                finish();
+                new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                        .setTitle(added > 0 ? "Done: " + added + " added" : "Nothing was added")
+                        .setMessage(text)
+                        .setCancelable(false)
+                        .setPositiveButton("OK", (d, w) -> finish())
+                        .show();
             });
         }).start();
     }

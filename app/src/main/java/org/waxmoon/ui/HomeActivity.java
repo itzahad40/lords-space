@@ -148,17 +148,30 @@ public class HomeActivity extends Activity {
         return getPackageManager().getLaunchIntentForPackage(VENDING) != null;
     }
 
-    /** Installs the Google Play components into the space (same as the classic "Enable GP" menu). */
-    private void ensureGoogle(int space) {
-        List<String> inst = installedHere(space);
-        for (String pkg : GOOGLE) {
-            if (!inst.contains(pkg)) {
-                try {
-                    HackApi.installPackageFromHost(pkg, space, false);
-                } catch (Throwable ignored) {
-                }
+    /**
+     * Installs the Google Play components into the space (same as the classic "Enable GP" menu).
+     * Background thread only. Returns null when everything is in place, otherwise a short problem text.
+     */
+    private String enableGoogle(final int space) {
+        Engine.Result<List<String>> inst = Engine.call(() -> HackApi.getInstalledPackages(0, space), 10000);
+        if (!inst.ok()) {
+            return "The engine did not answer (" + inst.problem() + "). Try Menu > Engine check.";
+        }
+        List<String> have = inst.value == null ? new ArrayList<String>() : inst.value;
+        StringBuilder bad = new StringBuilder();
+        for (final String pkg : GOOGLE) {
+            if (have.contains(pkg)) {
+                continue;
+            }
+            Engine.Result<Integer> r = Engine.call(() -> HackApi.installPackageFromHost(pkg, space, false), 90000);
+            if (!r.ok()) {
+                return "Installing " + pkg + " failed: " + r.problem();
+            }
+            if (r.value != null && r.value != 1 && r.value != -1) {
+                bad.append(pkg).append(" (code ").append(r.value).append(") ");
             }
         }
+        return bad.length() == 0 ? null : "Could not install: " + bad;
     }
 
     private int refreshGen;
@@ -184,13 +197,13 @@ public class HomeActivity extends Activity {
         new Thread(() -> {
             List<String> inst = new ArrayList<>();
             String err = null;
-            try {
-                List<String> l = HackApi.getInstalledPackages(0, space);
-                if (l != null) {
-                    inst = l;
+            Engine.Result<List<String>> r = Engine.call(() -> HackApi.getInstalledPackages(0, space), 10000);
+            if (r.ok()) {
+                if (r.value != null) {
+                    inst = r.value;
                 }
-            } catch (Throwable t) {
-                err = t.getClass().getSimpleName() + ": " + t.getMessage();
+            } else {
+                err = r.problem();
             }
             final List<String> fi = inst;
             final String fe = err;
@@ -342,22 +355,80 @@ public class HomeActivity extends Activity {
             toast("Google Play is not installed on this phone");
             return;
         }
+        toast("Getting Google Play ready in Space " + space + "...");
         new Thread(() -> {
-            ensureGoogle(space);
+            final String problem = enableGoogle(space);
             runOnUiThread(() -> {
+                if (problem != null) {
+                    showText("Google Play", problem);
+                    refresh();
+                    return;
+                }
                 Intent it = getPackageManager().getLaunchIntentForPackage(VENDING);
-                if (it != null) {
-                    it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-                    try {
-                        if (HackApi.startActivity(it, space) != 0) {
-                            toast("Could not open Google Play");
-                        }
-                    } catch (Throwable t) {
-                        toast("Engine error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+                if (it == null) {
+                    toast("Google Play not found on this phone");
+                    return;
+                }
+                it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                try {
+                    int code = HackApi.startActivity(it, space);
+                    if (code != 0) {
+                        showText("Google Play", "The engine could not start Google Play (code " + code + ").");
                     }
+                } catch (Throwable t) {
+                    showText("Google Play", "Engine error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
                 }
                 refresh();
             });
+        }).start();
+    }
+
+    private void showText(String title, final String text) {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle(title)
+                .setMessage(text)
+                .setPositiveButton("OK", null)
+                .setNegativeButton("Share", (d, w) -> {
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("text/plain");
+                    send.putExtra(Intent.EXTRA_TEXT, text);
+                    startActivity(Intent.createChooser(send, "Send"));
+                })
+                .show();
+    }
+
+    /** Asks the engine a few simple questions with timers, to see whether it is alive on this phone. */
+    private void engineCheck() {
+        final int space = Spaces.get(this);
+        toast("Checking the engine (up to 20 s)...");
+        new Thread(() -> {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Phone: ").append(android.os.Build.MANUFACTURER).append(' ').append(android.os.Build.MODEL)
+                    .append("\nAndroid: ").append(android.os.Build.VERSION.RELEASE)
+                    .append(" (API ").append(android.os.Build.VERSION.SDK_INT).append(")\n\n");
+            Engine.Result<int[]> a = Engine.call(() -> HackApi.getAvailableUserSpace(), 10000);
+            sb.append("1) getAvailableUserSpace: ");
+            if (a.ok()) {
+                sb.append("OK in ").append(a.ms).append(" ms -> ").append(java.util.Arrays.toString(a.value)).append('\n');
+            } else {
+                sb.append("FAILED, ").append(a.problem()).append('\n');
+            }
+            Engine.Result<List<String>> b = Engine.call(() -> HackApi.getInstalledPackages(0, space), 10000);
+            sb.append("2) getInstalledPackages(space ").append(space).append("): ");
+            if (b.ok()) {
+                sb.append("OK in ").append(b.ms).append(" ms -> ").append(b.value == null ? 0 : b.value.size())
+                        .append(" package(s)\n");
+                if (b.value != null) {
+                    for (String p : b.value) {
+                        sb.append("   ").append(p).append('\n');
+                    }
+                }
+            } else {
+                sb.append("FAILED, ").append(b.problem()).append('\n');
+            }
+            sb.append("3) Google Play on this phone: ").append(hostHasPlay() ? "yes" : "no").append('\n');
+            final String report = sb.toString();
+            runOnUiThread(() -> showText("Engine check", report));
         }).start();
     }
 
@@ -382,14 +453,13 @@ public class HomeActivity extends Activity {
     private void showMenu(View anchor) {
         PopupMenu m = new PopupMenu(this, anchor);
         m.getMenu().add(0, 0, 0, "Enable Google Play in this space");
-        m.getMenu().add(0, 1, 1, "Classic app list");
+        m.getMenu().add(0, 1, 1, "Engine check");
+        m.getMenu().add(0, 2, 2, "Classic app list (can freeze)");
         m.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 0) {
-                final int space = Spaces.get(this);
-                new Thread(() -> {
-                    ensureGoogle(space);
-                    runOnUiThread(this::refresh);
-                }).start();
+                openPlay();
+            } else if (item.getItemId() == 1) {
+                engineCheck();
             } else {
                 startActivity(new Intent(this, org.waxmoon.AppListActivity.class));
             }
