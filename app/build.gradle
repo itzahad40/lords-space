@@ -6,6 +6,17 @@ plugins {
 android {
     compileSdk rootProject.ext.compileSdkVersion
 
+    // One fixed key, so every build can be installed over the previous one and keeps the cloned apps and their data.
+    // (This key is not secret: keep the repository private.)
+    signingConfigs {
+        debug {
+            storeFile file('lords-space.keystore')
+            storePassword 'lordspace123'
+            keyAlias 'lordspace'
+            keyPassword 'lordspace123'
+        }
+    }
+
     defaultConfig {
         if (rootProject.ext.isMasterPkg) {
             applicationId rootProject.ext.masterPkg

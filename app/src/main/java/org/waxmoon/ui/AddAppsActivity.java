@@ -190,9 +190,9 @@ public class AddAppsActivity extends Activity {
 
     private void doClone() {
         final List<String> pkgs = new ArrayList<>(picked);
-        final java.util.Map<String, String> labels = new java.util.HashMap<>();
+        final java.util.Map<String, HostApps.Entry> byPkg = new java.util.HashMap<>();
         for (HostApps.Entry e : all) {
-            labels.put(e.pkg, e.label);
+            byPkg.put(e.pkg, e);
         }
         clone.setEnabled(false);
         new Thread(() -> {
@@ -202,21 +202,61 @@ public class AddAppsActivity extends Activity {
             for (int i = 0; i < pkgs.size() && !stuck; i++) {
                 final String pkg = pkgs.get(i);
                 final int pos = i + 1;
+                HostApps.Entry e = byPkg.get(pkg);
+                String name = e != null ? e.label : pkg;
+
+                // 1) keep our own copy of the app
+                runOnUiThread(() -> clone.setText("COPYING " + pos + "/" + pkgs.size() + "..."));
+                boolean copied = false;
+                String copyProblem = null;
+                try {
+                    CloneStore.copyFromPhone(this, pkg, name, e != null ? e.icon : getPackageManager().getDefaultActivityIcon());
+                    copied = true;
+                } catch (Throwable t) {
+                    copyProblem = t.getMessage();
+                }
+
+                // 2) install into the space from that copy (fallback: from the phone's app)
                 runOnUiThread(() -> clone.setText("CLONING " + pos + "/" + pkgs.size() + "..."));
-                String name = labels.containsKey(pkg) ? labels.get(pkg) : pkg;
-                Engine.Result<Integer> r = Engine.call(() -> HackApi.installPackageFromHost(pkg, space, false), 90000);
-                if (r.timedOut) {
-                    report.append(name).append(": the engine did not answer after 90 s\n");
+                Engine.Result<Integer> r = null;
+                String mode = "";
+                if (copied) {
+                    r = CloneStore.installFromCopy(this, pkg, space, false);
+                    mode = "own copy";
+                }
+                boolean good = r != null && r.ok() && r.value != null
+                        && (r.value == INSTALL_SUCCEEDED || r.value == INSTALL_FAILED_ALREADY_EXISTS);
+                String firstTry = r == null ? null : (r.ok() ? "code " + r.value : r.problem());
+                if (!good && !(r != null && r.timedOut)) {
+                    r = Engine.call(() -> HackApi.installPackageFromHost(pkg, space, false), 90000);
+                    mode = "phone's app";
+                    good = r.ok() && r.value != null
+                            && (r.value == INSTALL_SUCCEEDED || r.value == INSTALL_FAILED_ALREADY_EXISTS);
+                }
+
+                if (r != null && r.timedOut) {
+                    report.append(name).append(": the engine did not answer after a long wait\n");
                     stuck = true;
-                } else if (r.error != null) {
-                    report.append(name).append(": engine error, ").append(r.problem()).append('\n');
-                } else if (r.value != null && r.value == INSTALL_SUCCEEDED) {
-                    ok++;
-                    report.append(name).append(": added\n");
-                } else if (r.value != null && r.value == INSTALL_FAILED_ALREADY_EXISTS) {
-                    report.append(name).append(": already in this space\n");
+                } else if (!good) {
+                    report.append(name).append(": failed (").append(r != null && r.ok() ? "code " + r.value : r != null ? r.problem() : "?")
+                            .append(")").append(firstTry != null ? " [own copy: " + firstTry + "]" : "")
+                            .append(copyProblem != null ? " [copy: " + copyProblem + "]" : "").append('\n');
                 } else {
-                    report.append(name).append(": failed (code ").append(r.value).append(")\n");
+                    if (r.value == INSTALL_SUCCEEDED) {
+                        ok++;
+                    }
+                    String state = r.value == INSTALL_SUCCEEDED ? "added" : "already in this space";
+                    if (copied && mode.equals("own copy")) {
+                        CloneStore.add(this, space, pkg);
+                        report.append(name).append(": ").append(state).append(" (own copy saved, it stays even if you delete the original)\n");
+                    } else if (copied) {
+                        CloneStore.add(this, space, pkg);
+                        report.append(name).append(": ").append(state).append(" from the phone's app")
+                                .append(firstTry != null ? " (own copy install said: " + firstTry + ")" : "").append(", copy saved\n");
+                    } else {
+                        report.append(name).append(": ").append(state).append(", but NOT saved: ").append(copyProblem)
+                                .append(". It may disappear if you delete the original.\n");
+                    }
                 }
             }
             if (stuck) {
@@ -224,14 +264,12 @@ public class AddAppsActivity extends Activity {
             }
             final int added = ok;
             final String text = report.toString();
-            runOnUiThread(() -> {
-                new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                        .setTitle(added > 0 ? "Done: " + added + " added" : "Nothing was added")
-                        .setMessage(text)
-                        .setCancelable(false)
-                        .setPositiveButton("OK", (d, w) -> finish())
-                        .show();
-            });
+            runOnUiThread(() -> new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle(added > 0 ? "Done: " + added + " added" : "Result")
+                    .setMessage(text)
+                    .setCancelable(false)
+                    .setPositiveButton("OK", (d, w) -> finish())
+                    .show());
         }).start();
     }
 

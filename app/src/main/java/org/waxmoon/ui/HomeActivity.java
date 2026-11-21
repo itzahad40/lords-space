@@ -175,6 +175,8 @@ public class HomeActivity extends Activity {
     }
 
     private int refreshGen;
+    private final java.util.Set<String> restoreTried = java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+    private final java.util.Map<String, String> restoreStatus = new java.util.concurrent.ConcurrentHashMap<>();
     private int renderedGen;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
 
@@ -202,6 +204,7 @@ public class HomeActivity extends Activity {
                 if (r.value != null) {
                     inst = r.value;
                 }
+                inst = restoreMissing(space, inst);
             } else {
                 err = r.problem();
             }
@@ -214,6 +217,34 @@ public class HomeActivity extends Activity {
                 }
             });
         }).start();
+    }
+
+    /**
+     * The engine can forget clones (for example after the app was restarted). Whatever we have recorded for this
+     * space but the engine does not list is installed again from our own saved copy. Background thread only.
+     */
+    private List<String> restoreMissing(int space, List<String> inst) {
+        boolean changed = false;
+        for (CloneStore.Item it : CloneStore.list(this, space)) {
+            if (inst.contains(it.pkg) || !it.hasApk()) {
+                continue;
+            }
+            String key = space + ":" + it.pkg;
+            if (!restoreTried.add(key)) {
+                continue;
+            }
+            Engine.Result<Integer> r = CloneStore.installFromCopy(this, it.pkg, space, false);
+            restoreStatus.put(key, r.ok() ? "code " + r.value : r.problem());
+            changed = true;
+        }
+        if (changed) {
+            final int sp = space;
+            Engine.Result<List<String>> again = Engine.call(() -> HackApi.getInstalledPackages(0, sp), 10000);
+            if (again.ok() && again.value != null) {
+                return again.value;
+            }
+        }
+        return inst;
     }
 
     private void render(final int space, List<String> inst, String error, boolean loading) {
@@ -232,12 +263,27 @@ public class HomeActivity extends Activity {
                 : (hostHasPlay() ? "TAP TO ENABLE" : "NOT ON THIS PHONE");
         addRow(null, "Play Store", playSub, true, v -> openPlay(), null);
 
+        java.util.Set<String> listed = new java.util.HashSet<>();
+        for (final CloneStore.Item it : CloneStore.list(this, space)) {
+            listed.add(it.pkg);
+            final HostApps.Entry e = new HostApps.Entry();
+            e.pkg = it.pkg;
+            e.label = it.label;
+            e.icon = it.loadIcon(this);
+            String sub = null;
+            if (!inst.contains(it.pkg)) {
+                String st = restoreStatus.get(space + ":" + it.pkg);
+                sub = loading ? "CHECKING..." : st == null ? (it.hasApk() ? "RESTORING..." : "NO SAVED COPY")
+                        : "RESTORE FAILED (" + st + ")";
+            }
+            addRow(e, e.label, sub, false, v -> openApp(e.pkg), v -> confirmRemove(e));
+        }
         for (final String pkg : inst) {
-            if (pkg.equals(getPackageName()) || isGoogleCore(pkg)) {
+            if (pkg.equals(getPackageName()) || isGoogleCore(pkg) || listed.contains(pkg)) {
                 continue;
             }
             final HostApps.Entry e = HostApps.describe(this, pkg);
-            addRow(e, e.label, null, false, v -> openApp(pkg), v -> confirmRemove(e));
+            addRow(e, e.label, "NO SAVED COPY", false, v -> openApp(pkg), v -> confirmRemove(e));
         }
 
         Button add = new Button(this);
@@ -258,7 +304,10 @@ public class HomeActivity extends Activity {
 
         if (error != null) {
             Button retry = Ui.pill(this, "Retry", false);
-            retry.setOnClickListener(v -> refresh());
+            retry.setOnClickListener(v -> {
+                restoreTried.clear();
+                refresh();
+            });
             LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
             rl.topMargin = Ui.dp(this, 10);
             apps.addView(retry, rl);
@@ -326,27 +375,76 @@ public class HomeActivity extends Activity {
         apps.addView(row, rp);
     }
 
-    private void openApp(String pkg) {
-        int space = Spaces.get(this);
-        Intent it = getPackageManager().getLaunchIntentForPackage(pkg);
-        if (it == null) {
-            try {
-                it = HackApi.getLaunchIntentForPackage(pkg, space);
-            } catch (Throwable ignored) {
+    private boolean startOk(Integer code) {
+        return code != null && (code == 0 || code == 2 || code == 3);
+    }
+
+    /**
+     * Tries to start a package inside the space in a few different ways and writes down what each one said.
+     * Background thread only. Returns null when the app started, otherwise a report of what failed.
+     */
+    private String startInSpace(final String pkg, final int space) {
+        StringBuilder sb = new StringBuilder();
+        final Intent host = getPackageManager().getLaunchIntentForPackage(pkg);
+        final android.content.ComponentName cn = host != null ? host.getComponent() : null;
+        sb.append("Package: ").append(pkg).append("\nHost launch intent: ")
+                .append(cn != null ? cn.flattenToShortString() : "none").append('\n');
+
+        Engine.Result<Intent> eng = Engine.call(() -> HackApi.getLaunchIntentForPackage(pkg, space), 10000);
+        final Intent engIntent = eng.ok() ? eng.value : null;
+        sb.append("Engine launch intent: ");
+        if (!eng.ok()) {
+            sb.append(eng.problem());
+        } else if (engIntent == null || engIntent.getComponent() == null) {
+            sb.append("none");
+        } else {
+            sb.append(engIntent.getComponent().flattenToShortString());
+        }
+        sb.append('\n');
+
+        if (cn != null) {
+            Engine.Result<android.content.pm.ActivityInfo> ai = Engine.call(() -> HackApi.getActivityInfo(cn, 0, space), 10000);
+            sb.append("Activity known to the engine: ")
+                    .append(ai.ok() ? (ai.value != null ? "yes" : "NO") : ai.problem()).append('\n');
+        }
+
+        List<Intent> tries = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        if (host != null) {
+            tries.add(host);
+            names.add("host intent");
+        }
+        if (engIntent != null && (host == null || !engIntent.filterEquals(host))) {
+            tries.add(engIntent);
+            names.add("engine intent");
+        }
+        for (int i = 0; i < tries.size(); i++) {
+            final Intent it = new Intent(tries.get(i));
+            it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            Engine.Result<Integer> r = Engine.call(() -> HackApi.startActivity(it, space), 20000);
+            if (r.ok() && startOk(r.value)) {
+                return null;
             }
+            sb.append("startActivity(").append(names.get(i)).append(") = ")
+                    .append(r.ok() ? String.valueOf(r.value) : r.problem()).append('\n');
         }
-        if (it == null) {
-            toast("Cannot open this app");
-            return;
+        Engine.Result<Boolean> sp = Engine.call(() -> HackApi.startPackage(pkg, space), 20000);
+        if (sp.ok() && Boolean.TRUE.equals(sp.value)) {
+            return null;
         }
-        it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        try {
-            if (HackApi.startActivity(it, space) != 0) {
-                toast("Could not start the app");
+        sb.append("startPackage = ").append(sp.ok() ? String.valueOf(sp.value) : sp.problem()).append('\n');
+        return sb.toString();
+    }
+
+    private void openApp(final String pkg) {
+        final int space = Spaces.get(this);
+        toast("Starting...");
+        new Thread(() -> {
+            final String problem = startInSpace(pkg, space);
+            if (problem != null) {
+                runOnUiThread(() -> showText("Could not start the app", problem));
             }
-        } catch (Throwable t) {
-            toast("Engine error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
-        }
+        }).start();
     }
 
     private void openPlay() {
@@ -358,25 +456,17 @@ public class HomeActivity extends Activity {
         toast("Getting Google Play ready in Space " + space + "...");
         new Thread(() -> {
             final String problem = enableGoogle(space);
-            runOnUiThread(() -> {
-                if (problem != null) {
+            if (problem != null) {
+                runOnUiThread(() -> {
                     showText("Google Play", problem);
                     refresh();
-                    return;
-                }
-                Intent it = getPackageManager().getLaunchIntentForPackage(VENDING);
-                if (it == null) {
-                    toast("Google Play not found on this phone");
-                    return;
-                }
-                it.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-                try {
-                    int code = HackApi.startActivity(it, space);
-                    if (code != 0) {
-                        showText("Google Play", "The engine could not start Google Play (code " + code + ").");
-                    }
-                } catch (Throwable t) {
-                    showText("Google Play", "Engine error: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+                });
+                return;
+            }
+            final String startProblem = startInSpace(VENDING, space);
+            runOnUiThread(() -> {
+                if (startProblem != null) {
+                    showText("Google Play could not start", startProblem);
                 }
                 refresh();
             });
@@ -443,6 +533,7 @@ public class HomeActivity extends Activity {
                             HackApi.uninstallPackage(e.pkg, space);
                         } catch (Throwable ignored) {
                         }
+                        CloneStore.remove(this, space, e.pkg);
                         runOnUiThread(this::refresh);
                     }).start();
                 })
