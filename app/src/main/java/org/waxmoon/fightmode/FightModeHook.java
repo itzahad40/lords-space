@@ -35,6 +35,11 @@ public final class FightModeHook {
             return;
         }
         FightModeConfig.init(hostContext);
+        if (!FightModeConfig.hookEnabled) {
+            FightModeConfig.writeHookStatus("OFF|" + processName() + "|" + Build.VERSION.SDK_INT + "|0/4|switched off in Fight Mode settings");
+            Log.i(TAG, "mic hook is switched off in settings, not installing");
+            return;
+        }
         int ok = 0;
         String error = "";
         try {

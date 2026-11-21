@@ -34,6 +34,7 @@ public class FightModeActivity extends Activity {
     private final TextView[] chips = new TextView[FightModeConfig.VOICE_NAMES.length];
     private TextView presetText;
     private TextView hookStatus;
+    private android.widget.Switch hookSwitch;
     private TextView testText;
     private android.widget.Button testBtn;
     private volatile boolean testing;
@@ -123,6 +124,23 @@ public class FightModeActivity extends Activity {
         head.addView(title, tl);
         head.addView(Ui.logoBadge(this, 40));
         col.addView(head, new LinearLayout.LayoutParams(-1, -2));
+
+        // experimental hook switch (default off)
+        hookSwitch = new android.widget.Switch(this);
+        hookSwitch.setText("Mic hook inside cloned apps (experimental)");
+        hookSwitch.setTextColor(Ui.TEXT);
+        hookSwitch.setTextSize(14);
+        hookSwitch.setOnCheckedChangeListener((b, on) -> {
+            if (!syncing) {
+                FightModeConfig.hookEnabled = on;
+                commit();
+                hookStatus.setText(on ? "Hook ON. Close the cloned app completely and open it again from Home."
+                        : "Hook OFF. Cloned apps open without it.");
+            }
+        });
+        LinearLayout.LayoutParams hsw = new LinearLayout.LayoutParams(-1, -2);
+        hsw.topMargin = Ui.dp(this, 14);
+        col.addView(hookSwitch, hsw);
 
         hookStatus = Ui.text(this, "", 12, Ui.DIM);
         LinearLayout.LayoutParams hsl = new LinearLayout.LayoutParams(-1, -2);
@@ -336,6 +354,11 @@ public class FightModeActivity extends Activity {
             return;
         }
         String[] p = st.split("\\|", -1);
+        if (p.length > 0 && "OFF".equals(p[0])) {
+            hookStatus.setText("Mic hook is switched off (cloned apps open without it). " + ver);
+            hookStatus.setTextColor(Ui.DIM);
+            return;
+        }
         boolean ok = p.length > 0 && "OK".equals(p[0]);
         String proc = p.length > 1 ? p[1] : "?";
         String api = p.length > 2 ? p[2] : "?";
@@ -454,6 +477,7 @@ public class FightModeActivity extends Activity {
 
     private void syncFromConfig() {
         syncing = true;
+        hookSwitch.setChecked(FightModeConfig.hookEnabled);
         styleBars();
         gain.set(Math.round(FightModeConfig.gainDb));
         volume.set(Math.round(FightModeConfig.volume * 100f));

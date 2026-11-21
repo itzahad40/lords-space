@@ -37,6 +37,8 @@ public final class FightModeConfig {
     public static final float[] VOICE_PUNCH = {0f, 0.4f, 0.7f, 1f};
 
     public static volatile boolean enabled;
+    /** Experimental: install the mic hook inside cloned apps. Off by default, a bad hook can stop a cloned app from opening. */
+    public static volatile boolean hookEnabled;
     public static volatile float gainDb = 24f;
     public static volatile float volume = 1f;
     public static volatile float clarity;
@@ -69,6 +71,7 @@ public final class FightModeConfig {
         }
         Properties p = new Properties();
         p.setProperty("enabled", String.valueOf(enabled));
+        p.setProperty("hook", String.valueOf(hookEnabled));
         p.setProperty("gainDb", String.valueOf(gainDb));
         p.setProperty("volume", String.valueOf(volume));
         p.setProperty("clarity", String.valueOf(clarity));
@@ -101,6 +104,7 @@ public final class FightModeConfig {
         }
         lastModified = configFile.lastModified();
         enabled = Boolean.parseBoolean(p.getProperty("enabled", "false"));
+        hookEnabled = Boolean.parseBoolean(p.getProperty("hook", "false"));
         gainDb = clamp(parse(p, "gainDb", 24f), 0f, MAX_GAIN_DB);
         volume = clamp(parse(p, "volume", 1f), 0f, 1f);
         clarity = clamp(parse(p, "clarity", 0f), 0f, 1f);
