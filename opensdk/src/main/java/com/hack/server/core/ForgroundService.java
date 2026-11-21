@@ -20,6 +20,7 @@ public class ForgroundService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        com.hack.EngineTrace.log(this, "foreground service: onCreate");
         startForgroundNotification(getApplicationContext());
     }
 

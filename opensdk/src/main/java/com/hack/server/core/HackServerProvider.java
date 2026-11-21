@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 
+import com.hack.EngineTrace;
 import com.hack.Features;
 import com.hack.agent.ProviderBase;
 import com.hack.opensdk.Cmd;
@@ -35,7 +36,25 @@ public class HackServerProvider extends ProviderBase {
         ThreadUtils.postOnBackgroundThread(()->{
             getContext().startService(new Intent(getContext(), ForgroundService.class));
         });
-        return (boolean) Cmd.INSTANCE().exec(CmdConstants.CMD_CORE_PROVIDER_CREATE, getContext());
+        final android.content.Context ctx = getContext();
+        final long t0 = android.os.SystemClock.elapsedRealtime();
+        EngineTrace.log(ctx, "core provider: engine start BEGIN");
+        try {
+            boolean ok = (boolean) Cmd.INSTANCE().exec(CmdConstants.CMD_CORE_PROVIDER_CREATE, ctx);
+            EngineTrace.log(ctx, "core provider: engine start DONE in "
+                    + (android.os.SystemClock.elapsedRealtime() - t0) + " ms, result=" + ok);
+            return ok;
+        } catch (Throwable t) {
+            EngineTrace.log(ctx, "core provider: engine start FAILED after "
+                    + (android.os.SystemClock.elapsedRealtime() - t0) + " ms: " + t);
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+            if (t instanceof Error) {
+                throw (Error) t;
+            }
+            throw new RuntimeException(t);
+        }
     }
 
     @Override

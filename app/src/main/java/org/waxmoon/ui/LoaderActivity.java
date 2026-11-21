@@ -16,6 +16,10 @@ import android.widget.TextView;
 /** App loader / splash: logo, tagline and a progress bar, then opens Home. */
 public class LoaderActivity extends Activity {
     private static final int BAR_DP = 250;
+    private TextView statusText;
+    private android.widget.Button skipBtn;
+    private boolean opened;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -47,7 +51,10 @@ public class LoaderActivity extends Activity {
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.VERTICAL);
         bottom.setGravity(Gravity.CENTER_HORIZONTAL);
-        bottom.addView(Ui.text(this, "Loading your spaces...", 13, 0xFFCFC4C7));
+        statusText = Ui.text(this, "Loading your spaces...", 13, 0xFFCFC4C7);
+        statusText.setGravity(Gravity.CENTER);
+        statusText.setPadding(Ui.dp(this, 24), 0, Ui.dp(this, 24), 0);
+        bottom.addView(statusText);
         FrameLayout track = new FrameLayout(this);
         track.setBackground(Ui.rect(this, 0xFF26181B, 3, 0, 0));
         final View fill = new View(this);
@@ -60,6 +67,12 @@ public class LoaderActivity extends Activity {
         LinearLayout.LayoutParams trackLp = new LinearLayout.LayoutParams(Ui.dp(this, BAR_DP), Ui.dp(this, 6));
         trackLp.topMargin = Ui.dp(this, 12);
         bottom.addView(track, trackLp);
+        skipBtn = Ui.pill(this, "Continue anyway", false);
+        skipBtn.setVisibility(View.GONE);
+        skipBtn.setOnClickListener(v -> goHome());
+        LinearLayout.LayoutParams skipLp = new LinearLayout.LayoutParams(-2, -2);
+        skipLp.topMargin = Ui.dp(this, 16);
+        bottom.addView(skipBtn, skipLp);
         FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
         bottomLp.bottomMargin = Ui.dp(this, 64);
         root.addView(bottom, bottomLp);
@@ -101,13 +114,37 @@ public class LoaderActivity extends Activity {
         anim.addListener(new android.animation.AnimatorListenerAdapter() {
             @Override
             public void onAnimationEnd(android.animation.Animator animation) {
-                if (!isFinishing()) {
-                    startActivity(new Intent(LoaderActivity.this, HomeActivity.class));
-                    overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
-                    finish();
-                }
+                waitForEngine();
             }
         });
         anim.start();
+    }
+
+    /**
+     * The engine starts its server in a second process, and on some phones the first start is very slow.
+     * Warm it up here (off the UI thread) and open Home as soon as it answers, or after at most 75 s.
+     */
+    private void waitForEngine() {
+        new Thread(() -> {
+            Engine.call(() -> com.hack.opensdk.HackApi.getAvailableUserSpace(), 75000);
+            runOnUiThread(this::goHome);
+        }).start();
+        handler.postDelayed(() -> {
+            if (!opened && !isFinishing()) {
+                statusText.setText("Starting the engine... the first start can take about a minute.\n"
+                        + "If a 'not responding' box appears, tap WAIT (not Close).");
+                skipBtn.setVisibility(View.VISIBLE);
+            }
+        }, 5000);
+    }
+
+    private void goHome() {
+        if (opened || isFinishing()) {
+            return;
+        }
+        opened = true;
+        startActivity(new Intent(this, HomeActivity.class));
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+        finish();
     }
 }

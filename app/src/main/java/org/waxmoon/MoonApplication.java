@@ -14,9 +14,12 @@ public class MoonApplication extends HackApplication {
 
     @Override
     protected void attachBaseContext(Context base) {
+        final long t0 = android.os.SystemClock.elapsedRealtime();
+        com.hack.EngineTrace.log(base, "application attach BEGIN");
         super.attachBaseContext(base);
         sInstance = this;
         CrashReporter.install(base);
+        com.hack.EngineTrace.log(base, "application attach DONE in " + (android.os.SystemClock.elapsedRealtime() - t0) + " ms");
     }
 
     @Override

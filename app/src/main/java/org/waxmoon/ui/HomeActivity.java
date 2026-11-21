@@ -517,6 +517,11 @@ public class HomeActivity extends Activity {
                 sb.append("FAILED, ").append(b.problem()).append('\n');
             }
             sb.append("3) Google Play on this phone: ").append(hostHasPlay() ? "yes" : "no").append('\n');
+            String trace = com.hack.EngineTrace.read(this);
+            if (!trace.isEmpty()) {
+                int cut = Math.max(0, trace.length() - 1800);
+                sb.append("\nEngine timeline (newest at the bottom):\n").append(trace.substring(cut));
+            }
             final String report = sb.toString();
             runOnUiThread(() -> showText("Engine check", report));
         }).start();
