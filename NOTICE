@@ -1,0 +1,8 @@
+Lord's-Space
+Copyright 2026 Lords Community
+
+Based on NewBlackbox (https://github.com/ALEX5402/NewBlackbox), licensed under the Apache License 2.0.
+Changes: new launcher, Home / Add apps / Fight Mode screens (package org.lordspace), native sound processing,
+app name, icon and build configuration.
+
+Includes: Pine (https://github.com/canyie/pine), Cinzel font (SIL OFL 1.1), Material Design icons (Apache-2.0).
