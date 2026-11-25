@@ -601,6 +601,8 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "Intercepting getActiveNetworkInfoForUid for internet access");
+            // the cloned app's fake uid would be refused by the system: use the real one
+            top.niunaijun.blackbox.utils.MethodParameterUtils.replaceFirstUid(args);
             try {
                 
                 Object result = method.invoke(who, args);
@@ -1517,6 +1519,28 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
                 Slog.e(TAG, "Failed to create fallback NetworkInfo for String (19): " + e.getMessage());
                 return null;
             }
+        }
+    }
+
+    /**
+     * ConnectivityManager.getNetworkInfo(Network) asks the system about Process.myUid(), which inside a cloned app is
+     * a fake uid. The system answers "Requires ACCESS_DOWNLOAD_MANAGER / NETWORK_STACK" and Chromium's network code
+     * (Google Play, WebView) then crashes natively. Ask with the real host uid instead, and never let this call throw.
+     */
+    @ProxyMethod("getNetworkInfoForUid")
+    public static class GetNetworkInfoForUid extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            try {
+                top.niunaijun.blackbox.utils.MethodParameterUtils.replaceFirstUid(args);
+                Object result = method.invoke(who, args);
+                if (result != null) {
+                    return result;
+                }
+            } catch (Throwable e) {
+                Slog.w(TAG, "getNetworkInfoForUid failed, using a fallback: " + e);
+            }
+            return createNetworkInfo(ConnectivityManager.TYPE_WIFI, 0, "WIFI", "");
         }
     }
 }

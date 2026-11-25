@@ -465,7 +465,8 @@ public class HomeActivity extends Activity {
         m.getMenu().add(0, 0, 0, "Enable Google Play in this space");
         m.getMenu().add(0, 1, 1, "Allow file access for cloned apps");
         m.getMenu().add(0, 2, 2, "Engine check");
-        m.getMenu().add(0, 3, 3, "Original BlackBox screen");
+        m.getMenu().add(0, 3, 3, "Cloned app crash log");
+        m.getMenu().add(0, 4, 4, "Original BlackBox screen");
         m.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 0:
@@ -485,6 +486,11 @@ public class HomeActivity extends Activity {
                 case 2:
                     engineCheck();
                     break;
+                case 3: {
+                    String log = org.lordspace.CrashReporter.guestLog(this);
+                    showText("Cloned app crash log", log != null ? log : "No crash of a cloned app was recorded.");
+                    break;
+                }
                 default:
                     try {
                         startActivity(new Intent().setClassName(getPackageName(), "top.niunaijun.blackboxa.view.main.MainActivity"));
